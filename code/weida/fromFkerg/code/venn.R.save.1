@@ -1,0 +1,26 @@
+library(caroline)
+library(limma)
+setwd('results')
+
+treats <- c('733','735','736')
+de.l <- lapply(treats, function(id) read.delim(paste('734.v.',id,'.ALL.tab',sep=''), stringsAsFactors=F))
+names(de.l) <- treats
+
+gene2ko <- read.delim('/nas02/data/KEGG/KEGG/genes/links/genes_ko.list', header=F, col.names=c('gene','ko'), stringsAsFactors=F)
+modef.cls <- system('grep -P "^[A-Z]" /nas02/data/KEGG/KEGG/ko/ko', intern=T)
+
+
+venn.all.tab <- vennMatrix(l=lapply(de.l, function(de) de$gene))
+write.delim(venn.all.tab, file='venn.gene.all.tab', row.names=T)
+png('venn.gene.all.png'); vennDiagram(venn.all.tab); dev.off()
+
+
+venn.up.tab <- vennMatrix(l=lapply(de.l, function(de) de[de$logFC>0 & de$PValue<.01, 'gene']))
+write.delim(venn.up.tab, file='venn.gene.DEup.tab', row.names=T)
+png('venn.gene.DEup.png'); vennDiagram(venn.up.tab); dev.off()
+
+
+venn.dn.tab <- vennMatrix(l=lapply(de.l, function(de) de[de$logFC<0 & de$PValue<.01, 'gene']))
+write.delim(venn.dn.tab, file='venn.gene.DEdn.tab', row.names=T)
+png('venn.gene.DEdn.png'); vennDiagram(venn.dn.tab); dev.off()
+

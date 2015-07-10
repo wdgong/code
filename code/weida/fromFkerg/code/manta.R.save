@@ -1,0 +1,43 @@
+# module add r/2.15.1
+# R
+# install.packages('caroline') # CRAN install
+# biocLite('http://bioconductor.org/biocLite.R')
+# biocLite('edgeR') # bioconductor installs
+# biocLite('manta') # bioconductor installs
+
+setwd('../results')
+
+library('caroline')
+library('manta')
+library('edgeR')
+
+cts.ll.hFe.g <- read.delim('../results/MMETSP0733-phyloDB-merged.ctagg.tab')
+cts.ll.lFe.g <- read.delim('../results/MMETSP0735-phyloDB-merged.ctagg.tab')
+
+ct.ll <- nerge(list(lFe=nv(cts.ll.lFe.g,'paired_aligned'), hFe=nv(cts.ll.hFe.g,'paired_aligned')))
+names(ct.ll) <- c('lFe','hFe')
+raPlot(ct.ll)
+
+
+dge<-DGEList(ct.ll)
+dge$samples$group <- factor(c('low','high'))
+dge <- estimateCommonDisp(dge)
+
+dge$common.dispersion <- .2
+
+test <- exactTest(dge)
+
+
+
+test$table[order(test$table),]
+
+test.a <- nerge(list(test$table, cts.ll.hFe.g))
+
+test.a.sig <- subset(test.a, PValue < .0001)
+
+test.a.sig.sub <- test.a.sig[order(test.a.sig$logFC),]
+
+write.delim(test.a.sig, 'test.a.sig.sub.tab')
+
+#mnta <- counts2manta(ct.ll, annotation=data.frame(rownames(ct.ll)), a.merge.clmn=1)
+#mnta <- manta(ct.ll)

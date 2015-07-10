@@ -1,0 +1,259 @@
+
+######################
+## PATHWAY ANALYSIS ##
+######################
+
+setwd(paste(project.checkout.path, 'results/pathways/',sep=''))
+
+gn.set.nrch.dir <- 'gene.set.enrichment.tests/'
+xprsn.mapover.dir <- 'expression.overlay.maps/'
+map.lnk.lst.dir <- 'map.link.lists/'
+
+
+#DE.plusfe.up.dir gets created at the bottom of the table secion!!!!
+pathway.patterns <- paste(merge.name,'-',key.phyla,'.csv', sep='')
+pathway.paths <- sapply(pathway.patterns, function(pat)
+                        list.files(path=manta.dir, pattern=pat, full.names=TRUE)
+                        )
+
+path.de <- lapply(pathway.paths, read.csv, row.names=1, stringsAsFactors=F);
+names(path.de) <- key.phyla
+
+## sanity check
+if(length(path.de) != length(key.phyla))
+  stop("you must clear out the old DE tables in the manta 'DE.table' directory and rerun the previous three lines")
+
+
+##  create the new joint columns for both plusFe vs (ambient+control)
+for(kphy in key.phyla){
+  cols <- function(col)
+    paste(col,c('ctrl','ambt'),sep='.')
+  
+  path.de[[kphy]]$R.adj <- apply(path.de[[kphy]][,cols('R.adj')], 1, mean)
+  path.de[[kphy]]$fdr   <- apply(path.de[[kphy]][,cols('fdr'  )], 1, function(r) prod(r)*2)  
+  path.de[[kphy]]$fdr[     apply(path.de[[kphy]][,cols('R.adj')], 1, function(r) do.call('!=', as.list(sign(r))) ) ] <- NA
+  path.de[[kphy]]$path_descs <- path.de[[kphy]]$path_descs.ambt
+  path.de[[kphy]]$path_ids <- path.de[[kphy]]$path_ids.ambt
+  path.de[[kphy]]$ko <- path.de[[kphy]]$ko.ambt
+  path.de[[kphy]]$A <- apply(path.de[[kphy]][,cols('A')], 1, mean)
+}
+
+
+
+
+subprnds <- function(str){
+ return(sub('\\)','\\\\)',sub('\\(','\\\\(',str)))
+}
+
+for(this.phyla in key.phyla){
+  print(this.phyla)
+  p <- path.de[[this.phyla]] #data.frame(, R.adj=path.de.R[[this.phyla]])
+  ##p <- subset(p, !is.na(path_descs) & !is.na(fdr))
+
+  paths.per.genes.v <- nv(p$path_descs, p$what_def)
+  ## paths per gene
+  ##tmp <- sapply(paths.per.genes.v, function(ppgs) strsplit(ppgs, '; ')[[1]])
+  ## genes per paths
+
+  gens.p.path <- sapply(paths$definition, function(p) names(paths.per.genes.v)[grep(subprnds(p), paths.per.genes.v)])
+  sink(paste(gn.set.nrch.dir,'genes.per.path-',this.phyla,sep=''))
+  print(gens.p.path)
+  sink()
+
+  regd <- do.call(rbind.data.frame, lapply(paths$definition, gene.cts.hyper.test, p))
+  rownames(regd) <- paths$definition
+  regd <- regd[order(regd$up.p),]
+  path.tabs[[this.phyla]] <- regd
+
+  write.delim(regd, paste(gn.set.nrch.dir,'HyperGeo.test-',this.phyla,'.tab', sep=''), row.names=T)
+
+}
+
+save(path.tabs, file=paste(gn.set.nrch.dir,'path.tables.RData',sep=''))
+
+
+
+
+
+
+
+## pathway module level analysis
+
+modules <- dbReadTable(con, 'kegg_module')
+rownames(modules) <- modules$id
+modules <- modules[grep('_', modules$id, invert=T),]
+
+
+modules$col <- 'gray'
+
+
+path.cats <- c('iron_import', "nitrogen_assimilation","amino_acid",'nucleic_acid',"carbon_fixation","chlorophyll","photosynthesis","replication",'translation',"transcription",'formaldehyde_assimilation',"sugar",  "fat",      'vitamin','polyamine','oxidative_phosphorylation', 'urea', 'chorismate')
+path.cols <- c(       'red',                "maroon3",  "plum4",       'yellow',    "yellowgreen",     "green",    "darkgreen",      "orange3",      'brown',       "orange4",               'olivedrab1','khaki3','black',      'blue',    'purple',                      'white', 'lightpink', 'palevioletred3')#gray(.9),gray(.3)
+names(path.cols) <- path.cats
+
+
+#modules$col[grepl('Urea',modules$name)] <- 'lightpink'
+
+for(path.cat in path.cats)
+  modules$col[modules[,path.cat]] <- path.cols[path.cat]
+
+
+path.cols <- c(path.cols, nv(gray(.6),'other'))
+
+module.tabs <- list()
+
+# arginine, gln, glu, ile, val, ala, gly  are all missing
+
+for(this.phyla in key.phyla){
+  print(this.phyla)
+  p <- path.de[[this.phyla]] #data.frame(, R.adj=path.de.R[[this.phyla]])
+  p <- subset(p, !is.na(ko) & !ko=='"')# & !is.na(fdr))
+
+  p$modules <- sapply(p$ko, function(k) paste(modules$id[grep(k,modules$definition)], collapse='; '))
+
+  #p <- subset(p, !is.na(modules) )
+
+  ##modules.per.genes.v <- nv(p$modules, p$what_def)
+  modules.per.genes.v <- p$modules
+  names(modules.per.genes.v) <- p$ko
+  
+  adj.xR <- with(p, aggregate(p$R.adj, list(p$ko), mean, na.rm=T)); adj.xR <- nv(adj.xR$x, adj.xR$Group.1)
+  xA <-     with(p, aggregate(p$A,     list(p$ko), sum, na.rm=T));     xA <- nv(    xA$x,     xA$Group.1)
+  
+  ## genes per modules
+  kos.p.module <-sapply(modules$id, function(mid) names(modules.per.genes.v)[grepl(mid, modules.per.genes.v)])
+  
+  module.avg.R.adj  <-  sapply(1:nrow(modules), function(i)  mean(adj.xR[kos.p.module[[modules[i,'id']]]]))
+  module.avg.A      <-  sapply(1:nrow(modules), function(i)  sum(    xA[kos.p.module[[modules[i,'id']]]]))
+  module.sd.R.adj  <-  sapply(1:nrow(modules), function(i)    sd(adj.xR[kos.p.module[[modules[i,'id']]]]))
+  module.exprs.pcts <-  sapply(1:nrow(modules), function(i)  moddef.express(mod.def=modules[i,'definition'], KOs=kos.p.module[[modules[i,'id']]] ,verbose=F))
+
+  aggs <- data.frame(pct=module.exprs.pcts, ko_ct=sapply(kos.p.module, length),  R=module.avg.R.adj, Rsd=module.sd.R.adj, A=module.avg.A, 
+                     stringsAsFactors=FALSE)
+  module.exprs.df <- nerge(list(m=modules, a=aggs)) #id=names(kos.p.module), name=name, product=product, cols=col,
+  module.exprs.df <- module.exprs.df[rev(order(module.exprs.df$col=='gray')),]
+
+  
+  mod.main <- paste("Station-P Metatranscriptome Iron Enrichment\n KEGG module expression\n",this.phyla,sep='') #module.exprs.df <- module.exprs.df[grep('_', module.exprs.df$id, invert=T),]
+
+  m.annot.v <- nv(c(F,T), c('','-annot'))
+  for(m.annot in m.annot.v){
+    for(ext in c('pdf','png')){
+      if(m.annot & ext=='pdf')
+        next()
+      #mod.fi.nm <- paste('modules/pathway.module-PctVsRadj-',this.phyla,names(m.annot.v)[m.annot+1],'.',ext, sep='')
+      mod.fi.nm <- paste('modules/pathway.module-avgRA+pctCex-',this.phyla,names(m.annot.v)[m.annot+1],'.',ext, sep='')
+      if(ext=='png'){
+        png(mod.fi.nm, width=72*8.5, height=72*11)
+        cex <- .7
+      }else{
+        pdf(mod.fi.nm, width=   8.5, height=   11)
+        cex <- .4
+      }
+     
+      with(module.exprs.df, plot(A, R, bg=col, col=gray(.6), cex=pct*4, main=mod.main, pch=21, log='x',
+                                 ylab='Avg (mod) Fold Change [avg(R.adj)]', xlab='Log Sum (mod) of Avg (lib) Log Read Count [log(sum(A))]'))
+      
+      abline(h=0, col=gray(.9))
+
+      if(m.annot){
+        with(       module.exprs.df            , text(A, R, abrv, col=gray(.4), cex=cex))  #sub(',','\n',name),
+        with(subset(module.exprs.df, amino_acid | iron_import| nitrogen_assimilation | chlorophyll), text(A, R, abrv, col='black', cex=cex))  #sub(',','\n',name),`
+      }
+        #  with(module.exprs.df, text(pct, R, sub(',','\n',name), col=cols, cex=cex))
+
+      if(this.phyla=='heterotroph')
+        legend('topright', pch=19,col=path.cols, cex=.9, legend=sub('_',' ',names(path.cols)), inset=.05)
+      
+      dev.off()
+    }  
+  }  
+  write.csv(module.exprs.df, paste('modules/pathway.module-expression-',this.phyla,'.csv',sep=''))
+  
+}
+write.delim(modules, 'modules/kegg_modules.tab')
+
+
+#save(module.tabs, file=paste(gn.set.nrch.dir,'module.tables.RData',sep=''))
+
+
+
+
+pathways.dir <- '../../results/pathways/'
+
+
+###############
+### FIGURES ###
+##############
+
+setwd(paste(project.checkout.path, 'paper/figures/',sep=''))
+
+par(family='ariel')  #don't know if this is actually necessary or if it needs to be set within 'tiff' anyway
+dev.off()
+
+conditions <- nv(factor(x=1:2, labels=c('ambient','plusFe')), c('ref','obs'))
+
+A.axlab <- expression(paste("A :  ",frac(paste(log[2],"(plusFe) + ",log[2],"(ambient)",sep=''),2)))
+R.axlab <- expression(paste("R :   ",log[2],"(plusFe / ambient)"))
+
+
+## resolution in pixels
+MIN.RES <- 300
+## dimentions in inches
+WIDTH.ONE.COL <- 3.425 # 3.27 <- plos bio size
+WIDTH.MID.COL <- 4.13
+WIDTH.TWO.COL <- 7.08 
+HEIGHT.MAX <- 9.19
+
+unsig.gray <- gray(.80)
+## manta
+
+manta.xlim <- c(-.5,15.3)
+
+
+###################################
+## 3 DiatomKeggModules
+
+km.name <- 'DiatomKeggModules'
+km.dir <- paste('3-',km.name,'/',sep='')
+
+if(!file.exists(km.dir))
+  dir.create(km.dir)
+
+anoteTF <- nv(c(F,T),c('-noAnnot',''))
+
+km.labs <- nv(toupper(letters[1:length(key.phyla)]),key.phyla)
+
+for(anote in anoteTF){
+
+tiff(paste(km.dir, km.name, names(anoteTF)[anote+1], '.tiff',sep=''), height=HEIGHT.MAX*1/2, width=WIDTH.ONE.COL, units='in', res=MIN.RES, pointsize=12, compression='lzw')
+
+#par(mfcol=c(2,2))
+par(mar=c(.1,1.3,.1,.1))
+#for(this.phyla in key.phyla){
+#  print(this.phyla)
+m.e.df <- read.csv(paste(pathways.dir, 'modules', paste('pathway.module-expression-','diatoms','.csv',sep=''),sep='/'), stringsAsFactors=FALSE)
+m.e.df <- subset(m.e.df, !grepl('(, prokaryotes|, bacteria)', name))
+  
+with(m.e.df, plot(A, R, pch='', log='x', xlim=c(1,300), ylim=c(-6.5,3.7),xaxt='n', yaxt='n', bty='l', axes=F))
+abline(h=0, col=gray(.9))
+with(m.e.df, points(A, R, bg=col, col=gray(.6), cex=pct*2.5, pch=21))
+  
+axis(side=1,  line=-8.2,  tck=-.01, cex=.6, cex.axis=.8, mgp=c(2,.05,0))#, padj=4)
+axis(side=2,  at=seq(-2,4,by=2),tck=-.01,  cex=.6, cex.axis=.8, las=1, mgp=c(2,.3,0))#, hadj=2.5,) 
+mtext('sum(A)', side=1, cex=.7, line=-7.5)#, line=-1.7)
+mtext('avg(R)', side=2, cex=.7, line=.7, at=1)#, line=-2) #"(",frac('plusFe','ambient'),")"
+
+if(anote){
+  #with(subset(m.e.df, col!='gray')                      , text(A, R, abrv, col=gray(.3), cex=.7))
+  with(subset(m.e.df, amino_acid | nitrogen_assimilation), text(A, R, abrv, col='black', cex=.6))  
+}
+
+path.cols3 <- path.cols[!names(path.cols) %in% 'polyamine']
+legend('bottom',  fill=path.cols3, border='gray', cex=.6, legend=sub('_',' ',names(path.cols3)), inset=.01, ncol=2)
+
+dev.off()
+
+}
+
+

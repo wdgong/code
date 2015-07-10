@@ -1,0 +1,107 @@
+#stats plots 
+# module add r/3.0.1
+# bsub -q bigmem -P statsplots -n1 -o $(pwd)/stats.plots.out -e $(pwd)/stats.plots.err R CMD BATCH code/stats.plots.R  stats.plots.Rout
+setwd('/proj/marchlab/projects/NeuseMetatx/')
+library(caroline)
+
+blast.headers <- scan('code/blast_headers.sh', what='string')
+blast.headers <- blast.headers[2:length(blast.headers)]
+blast.headers[2:length(blast.headers)] <- gsub("'",'',blast.headers[2:length(blast.headers)])
+
+path <- 'results/blast_ta_contigs/'
+samples <- list.files(pattern='^Sample[_0-9B]*$',path=path, )
+setwd(path)
+
+s <- list()
+annot.dbs <- c('mR')#,'nr','KEGG')
+
+for(samp in samples[17:23]){
+ message(samp)
+ for(adb in annot.dbs){
+  message(adb)
+
+  s[[samp]]$t <- list()
+  tabs <- list.files(pattern=paste(adb,'*','tab',sep='.'),path=samp)
+  
+  print(' reading BLAST tab files')  
+  #s[[samp]]$t.list <- lapply(paste(samp,tabs,sep='/'), function(x) {print(x) ;read.delim(file=x, comment.char='#', stringsAsFactors=FALSE)  })
+  s[[samp]]$t.list <- lapply(paste(samp,tabs,sep='/'), read.delim, comment.char='#', stringsAsFactors=FALSE)
+
+  tnms <- 1:length(s[[samp]]$t.list)
+
+  ## next two-line section is a hack to remove the old "subject accession" column and square these tables from Sample_1 (mostly ncol=18) with the rest of the Samples (ncol==17)
+  ncls <- sapply(s[[samp]]$t.list, ncol)  
+  for (t in tnms[ncls==18])  s[[samp]]$t.list[[t]] <- s[[samp]]$t.list[[t]][,-3]    # get rid of the third column of the 18 column data.frames
+
+  for (t in tnms)      names(s[[samp]]$t.list[[t]]) <- blast.headers
+
+  print(' collapsing time/space sample parts into one table')
+  s[[samp]]$tab <- do.call(rbind.data.frame, s[[samp]]$t.list)
+
+  s[[samp]]$tab$stitle[is.na(s[[samp]]$tab$stitle)] <- 'NA'
+
+  if(adb=='nr'){
+   s[[samp]]$tab$species <- m(' \\[(.+)\\]$', s[[samp]]$tab$stitle)
+   s[[samp]]$tab$gene <- m('^(.+) \\[', s[[samp]]$tab$stitle)
+   s[[samp]]$tab$species[is.na(s[[samp]]$tab$species)]	<- 'NA'
+   bonus.clmn <- 'species'
+  }
+  if(adb=='KEGG'){
+   if(samp=='Sample_1_020')
+     gko <- read.delim('/proj/marchlab/data/kegg/2014.01.25/genes/links/genes_ko.list', col.names=c('gid','kid'), stringsAsFactors=F)
+   s[[samp]]$tab <- merge(x=s[[samp]]$tab,y=gko,by.x='sseqid', by.y='gid', all.x=TRUE)
+   s[[samp]]$tab$gene <- s[[samp]]$tab$kid
+   bonus.clmn <- 'kid'
+  }
+  if(adb=='mR'){
+   s[[samp]]$tab$species <- m('ORGANISM=([^\\/]+)/LENGTH', s[[samp]]$tab$stitle)
+   s[[samp]]$tab$species[is.na(s[[samp]]$tab$species)]  <- 'NA'
+   s[[samp]]$tab$gene  <- rep(NA, nrow(s[[samp]]$tab))
+   bonus.clmn <- 'species'
+  }else{
+   s[[samp]]$tab$gene[is.na(s[[samp]]$tab$gene)] <- 'NA'
+  }
+
+  print(' finding best hits')
+  
+  s[[samp]]$t <- bestBy(df=s[[samp]]$tab, best='evalue', by='qseqid', clmns=c('qseqid','evalue','score','sseqid','staxids','gene',bonus.clmn), sql=T)
+  write.table(s[[samp]]$t, file=paste(samp,adb,'best.hits.tab',sep='.'))
+
+  if(adb %in% c('nr','KEGG')){
+   print(' grouping by gene')
+   s[[samp]]$tg.gene <- groupBy(df=s[[samp]]$t, by='gene', aggregation='length', clmns='gene',sql=T) 
+   names(s[[samp]]$tg.gene) <- 'count'
+   s[[samp]]$tg.gene$gene <- rownames(s[[samp]]$tg.gene)
+   write.delim(s[[samp]]$tg.gene[order(s[[samp]]$tg.gene[,'count'], decreasing=T) ,], file=paste(samp,adb,'xt.gene.tab',sep='.'))
+  }
+
+  if(adb=='KEGG'){
+   print(' grouping by seqid')
+   s[[samp]]$tg.sseqid <- groupBy(df=s[[samp]]$t, by='sseqid', aggregation='length', clmns='sseqid',sql=T)
+   names(s[[samp]]$tg.sseqid) <- 'count'
+   s[[samp]]$tg.sseqid$sseqid <- rownames(s[[samp]]$tg.sseqid)
+   write.delim(s[[samp]]$tg.sseqid[order(s[[samp]]$tg.sseqid[,'count'], decreasing=T) ,], file=paste(samp,adb,'xt.sseqid.tab',sep='.'))
+  }
+
+  if(adb %in% c('nr','mR')){
+   print(' grouping by species')
+   s[[samp]]$tg.species <- groupBy(df=s[[samp]]$t, by='species', aggregation='length', clmns=c('species'),sql=T) 
+   names(s[[samp]]$tg.species) <- 'count'  
+   s[[samp]]$tg.species$species <- rownames(s[[samp]]$tg.species)
+   write.delim(s[[samp]]$tg.species[order(s[[samp]]$tg.species[,'count'], decreasing=T) ,], file=paste(samp,adb,'xt.species.tab',sep='.'))
+  }
+ } 
+}
+
+
+
+#save(s,file=paste('Nuese',adb,'Robj',sep=''))
+
+
+if(F){
+ load('Nuese.Robj')
+ for (samp in samples){
+  s[[samp]]$t.g
+ }
+}
+
